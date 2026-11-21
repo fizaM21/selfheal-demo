@@ -1,0 +1,29 @@
+name: Self-Heal Notify
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+permissions: {}
+
+jobs:
+  notify:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send signed failure event
+        env:
+          URL: ${{ secrets.SELFHEAL_URL }}
+          SECRET: ${{ secrets.SELFHEAL_WEBHOOK_SECRET }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$SECRET" ]; then echo "SELFHEAL_URL / SELFHEAL_WEBHOOK_SECRET not set - skipping"; exit 0; fi
+          BODY=$(jq -cn --arg repo "$REPO" --argjson id "$RUN_ID" --arg name "$RUN_NAME" --arg branch "$BRANCH" --arg sha "$SHA" \
+            '{action:"completed",repository:{full_name:$repo},workflow_run:{id:$id,name:$name,conclusion:"failure",head_branch:$branch,head_sha:$sha}}')
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
+          curl --fail-with-body -sS -X POST "$URL/webhooks/github" \
+            -H "Content-Type: application/json" -H "X-GitHub-Event: workflow_run" \
+            -H "X-Hub-Signature-256: sha256=$SIG" --data "$BODY"
